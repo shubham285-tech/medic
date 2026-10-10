@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}System Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title-group">
+    <h2><i class="fas fa-sliders-h" style="color: var(--secondary); margin-right: 10px;"></i> System Settings & Configuration</h2>
+    <p>Fine-tune automatic expiry warning thresholds, reorder parameters, and facility profile.</p>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+  
+  <!-- Left: Main Configuration Forms -->
+  <div style="display: flex; flex-direction: column; gap: 24px;">
+    
+    <!-- Box 1: Expiry & Inventory Automation Settings -->
+    <div class="glass-card" style="padding: 30px;">
+      <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+        <i class="fas fa-bell text-warning"></i> Expiry Warning & Stock Thresholds
+      </h3>
+
+      <form action="{{ url_for('settings') }}" method="POST">
+        <input type="hidden" name="action" value="save_settings">
+
+        <div class="form-grid">
+          <!-- Expiry Warning Days -->
+          <div class="form-group">
+            <label for="expiry_warning_days">
+              Expiry Warning Period (Days) <span class="required">*</span>
+            </label>
+            <div class="input-wrapper">
+              <i class="fas fa-hourglass-start input-icon"></i>
+              <input type="number" min="1" max="365" name="expiry_warning_days" id="expiry_warning_days" class="form-control" value="{{ settings.expiry_warning_days }}" required>
+            </div>
+            <span class="form-help-text">Medicines expiring within this window will trigger 'EXPIRING SOON' status (Default: 30 days).</span>
+          </div>
+
+          <!-- Low Stock Threshold -->
+          <div class="form-group">
+            <label for="low_stock_threshold">
+              Global Low-Stock Alert Threshold <span class="required">*</span>
+            </label>
+            <div class="input-wrapper">
+              <i class="fas fa-cubes input-icon"></i>
+              <input type="number" min="1" name="low_stock_threshold" id="low_stock_threshold" class="form-control" value="{{ settings.low_stock_threshold }}" required>
+            </div>
+            <span class="form-help-text">Default threshold for flagging low physical inventory.</span>
+          </div>
+
+          <!-- Pharmacy Brand Name -->
+          <div class="form-group">
+            <label for="pharmacy_name">Facility / Pharmacy Name</label>
+            <div class="input-wrapper">
+              <i class="fas fa-clinic-medical input-icon"></i>
+              <input type="text" name="pharmacy_name" id="pharmacy_name" class="form-control" value="{{ settings.pharmacy_name }}" required>
+            </div>
+          </div>
+
+          <!-- Contact Email -->
+          <div class="form-group">
+            <label for="contact_email">Official Surveillance Contact Email</label>
+            <div class="input-wrapper">
+              <i class="fas fa-envelope input-icon"></i>
+              <input type="email" name="contact_email" id="contact_email" class="form-control" value="{{ settings.contact_email }}" required>
+            </div>
+          </div>
+
+          <!-- Currency Symbol -->
+          <div class="form-group">
+            <label for="currency_symbol">Currency Symbol</label>
+            <div class="input-wrapper">
+              <i class="fas fa-coins input-icon"></i>
+              <input type="text" name="currency_symbol" id="currency_symbol" class="form-control" value="{{ settings.currency_symbol }}" required maxlength="4">
+            </div>
+          </div>
+
+          <!-- UI Theme -->
+          <div class="form-group">
+            <label for="theme">Dashboard Visual Theme</label>
+            <div class="input-wrapper">
+              <i class="fas fa-palette input-icon"></i>
+              <select name="theme" id="theme" class="form-control">
+                <option value="dark-glass" selected>Deep Slate 3D Glassmorphism (Active)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 24px; text-align: right;">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save"></i> Save Configuration
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Box 2: Staff User Profile & Password -->
+    <div class="glass-card" style="padding: 30px;">
+      <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+        <i class="fas fa-user-shield text-success"></i> Pharmacist Profile & Security
+      </h3>
+
+      <form action="{{ url_for('settings') }}" method="POST">
+        <input type="hidden" name="action" value="update_profile">
+
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="full_name">Full Name</label>
+            <div class="input-wrapper">
+              <i class="fas fa-user input-icon"></i>
+              <input type="text" name="full_name" id="full_name" class="form-control" value="{{ user.full_name if user else '' }}" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="email">Account Email</label>
+            <div class="input-wrapper">
+              <i class="fas fa-envelope input-icon"></i>
+              <input type="email" name="email" id="email" class="form-control" value="{{ user.email if user else '' }}" required>
+            </div>
+          </div>
+
+          <div class="form-group form-full">
+            <label for="new_password">Change Password (Leave blank to keep existing)</label>
+            <div class="input-wrapper">
+              <i class="fas fa-key input-icon"></i>
+              <input type="password" name="new_password" id="new_password" class="form-control" placeholder="••••••••" minlength="6">
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 24px; text-align: right;">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-id-badge"></i> Update Profile
+          </button>
+        </div>
+      </form>
+    </div>
+
+  </div>
+
+  <!-- Right: Maintenance & Demonstration Controls -->
+  <div style="display: flex; flex-direction: column; gap: 24px;">
+    
+    <!-- System Diagnostics Card -->
+    <div class="glass-card" style="padding: 24px;">
+      <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px;">
+        <i class="fas fa-server" style="color: var(--secondary);"></i> System Telemetry
+      </h3>
+      <div style="font-size: 13px; color: var(--text-muted); display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; justify-content: space-between;">
+          <span>Database Engine:</span>
+          <strong style="color: var(--text-main);">SQLite 3.x</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Application Engine:</span>
+          <strong style="color: var(--text-main);">Python 3.11 / Flask</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Status Evaluation:</span>
+          <strong style="color: var(--status-safe);"><i class="fas fa-check-circle"></i> Dynamic Real-time</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Cryptographic Hash:</span>
+          <strong style="color: var(--text-main);">PBKDF2-SHA256</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Demo Data Restoration Card -->
+    <div class="glass-card" style="padding: 24px; border-color: rgba(245, 158, 11, 0.3);">
+      <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 10px; color: #fbbf24;">
+        <i class="fas fa-sync-alt"></i> Demo Data Reset
+      </h3>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+        Restore the realistic sample medicines and alerts dataset spanning <strong>SAFE</strong>, <strong>EXPIRING SOON</strong>, <strong>EXPIRED</strong>, and <strong>LOW STOCK</strong> items.
+      </p>
+      
+      <form action="{{ url_for('settings') }}" method="POST" onsubmit="return confirm('Restore default demo medicines and reset database?');">
+        <input type="hidden" name="action" value="reset_demo_data">
+        <button type="submit" class="btn btn-secondary btn-block btn-sm">
+          <i class="fas fa-database"></i> Reset Demo Database
+        </button>
+      </form>
+    </div>
+
+  </div>
+
+</div>
+{% endblock %}

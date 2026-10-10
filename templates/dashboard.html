@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | Overview{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title-group">
+    <h2>{{ greeting }}, {{ current_user.full_name if current_user else 'Doctor' }}!</h2>
+    <p>Here's your live pharmaceutical inventory and expiry surveillance overview.</p>
+  </div>
+  <div class="page-actions">
+    <a href="{{ url_for('reports') }}" class="btn btn-secondary">
+      <i class="fas fa-file-export"></i> Reports
+    </a>
+    <a href="{{ url_for('add_medicine') }}" class="btn btn-primary">
+      <i class="fas fa-plus"></i> Add New Medicine
+    </a>
+  </div>
+</div>
+
+<!-- 3D Stat Cards Grid -->
+<div class="stats-grid">
+  <!-- Card 1: Total Medicines -->
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-blue">
+        <i class="fas fa-prescription-bottle-alt"></i>
+      </div>
+      <span class="stat-pill pill-neutral">Total Batches</span>
+    </div>
+    <div class="stat-value">{{ stats.total_medicines }}</div>
+    <div class="stat-label">Unique Medicine Batches</div>
+  </div>
+
+  <!-- Card 2: Total Stock Units -->
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-cyan">
+        <i class="fas fa-boxes"></i>
+      </div>
+      <span class="stat-pill pill-neutral">Units</span>
+    </div>
+    <div class="stat-value">{{ stats.total_stock }}</div>
+    <div class="stat-label">Total Physical Stock Units</div>
+  </div>
+
+  <!-- Card 3: Expiring Soon -->
+  <div class="stat-card-3d" style="border-color: rgba(245, 158, 11, 0.35);">
+    <div class="stat-top">
+      <div class="stat-icon icon-amber">
+        <i class="fas fa-hourglass-half"></i>
+      </div>
+      <span class="stat-pill pill-warning">Within {{ warning_days }} Days</span>
+    </div>
+    <div class="stat-value" style="color: #fbbf24;">{{ stats.expiring_soon }}</div>
+    <div class="stat-label">Expiring Soon (Action Required)</div>
+  </div>
+
+  <!-- Card 4: Expired -->
+  <div class="stat-card-3d" style="border-color: rgba(239, 68, 68, 0.4);">
+    <div class="stat-top">
+      <div class="stat-icon icon-red">
+        <i class="fas fa-ban"></i>
+      </div>
+      <span class="stat-pill pill-danger">Quarantine</span>
+    </div>
+    <div class="stat-value" style="color: #f87171;">{{ stats.expired }}</div>
+    <div class="stat-label">Expired Medicines (Do Not Dispense)</div>
+  </div>
+
+  <!-- Card 5: Safe Medicines -->
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-green">
+        <i class="fas fa-shield-virus"></i>
+      </div>
+      <span class="stat-pill pill-success">Approved</span>
+    </div>
+    <div class="stat-value" style="color: #34d399;">{{ stats.safe }}</div>
+    <div class="stat-label">Safe & Healthy Shelf-Life</div>
+  </div>
+
+  <!-- Card 6: Low Stock -->
+  <div class="stat-card-3d" style="border-color: rgba(249, 115, 22, 0.35);">
+    <div class="stat-top">
+      <div class="stat-icon icon-orange">
+        <i class="fas fa-exclamation-circle"></i>
+      </div>
+      <span class="stat-pill pill-lowstock">Reorder</span>
+    </div>
+    <div class="stat-value" style="color: #fb923c;">{{ stats.low_stock }}</div>
+    <div class="stat-label">Below Safety Reorder Threshold</div>
+  </div>
+</div>
+
+<!-- Interactive Analytics Charts Grid -->
+<div class="charts-grid">
+  <!-- Chart 1: Monthly Expiry Timeline -->
+  <div class="glass-card chart-card">
+    <div class="chart-header">
+      <h3><i class="fas fa-chart-line" style="color: var(--secondary);"></i> Monthly Expiry Forecast Timeline</h3>
+      <span style="font-size: 12px; color: var(--text-dim);">Upcoming batches by month</span>
+    </div>
+    <div class="chart-canvas-wrapper">
+      <canvas id="monthlyTrendChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Chart 2: Expiry Status Donut -->
+  <div class="glass-card chart-card">
+    <div class="chart-header">
+      <h3><i class="fas fa-chart-pie" style="color: var(--status-safe);"></i> Expiry Distribution</h3>
+      <span style="font-size: 12px; color: var(--text-dim);">Real-time status</span>
+    </div>
+    <div class="chart-canvas-wrapper">
+      <canvas id="expiryStatusChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Two-column Activity & Urgent Alerts Grid -->
+<div class="activity-grid">
+  <!-- Left: Urgent Expiry Alerts Feed -->
+  <div class="glass-card" style="padding: 24px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+      <h3 style="font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+        <i class="fas fa-bell text-warning"></i> Recent Expiry & Stock Alerts
+      </h3>
+      <a href="{{ url_for('alerts') }}" style="font-size: 13px; color: var(--secondary);">View All Alerts &rarr;</a>
+    </div>
+
+    {% if recent_alerts %}
+      <div class="alerts-list">
+        {% for alert in recent_alerts %}
+          <div class="alert-item-card {% if alert.is_read == 0 %}unread{% endif %}">
+            <div class="alert-icon-wrap {% if alert.type == 'EXPIRED' %}icon-red{% elif alert.type == 'EXPIRING_SOON' %}icon-amber{% else %}icon-orange{% endif %}">
+              <i class="fas {% if alert.type == 'EXPIRED' %}fa-skull-crossbones{% elif alert.type == 'EXPIRING_SOON' %}fa-clock{% else %}fa-cube{% endif %}"></i>
+            </div>
+            <div class="alert-item-content">
+              <div class="alert-item-header">
+                <span class="alert-title">{{ alert.type.replace('_', ' ') }}</span>
+                <span class="alert-time">{{ alert.created_at[:16] }}</span>
+              </div>
+              <p class="alert-message">{{ alert.message }}</p>
+              <div class="alert-actions">
+                {% if alert.medicine_id %}
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="viewMedicineDetails({{ alert.medicine_id }})">
+                    <i class="fas fa-eye"></i> View Medicine
+                  </button>
+                {% endif %}
+                {% if alert.is_read == 0 %}
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="markAlertAsRead({{ alert.id }}, this)">
+                    <i class="fas fa-check"></i> Mark Read
+                  </button>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-icon-wrap"><i class="fas fa-shield-alt"></i></div>
+        <h3>No active alerts</h3>
+        <p>Your inventory is fully compliant and safe.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Recently Added Medicines Table -->
+  <div class="glass-card" style="padding: 24px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+      <h3 style="font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+        <i class="fas fa-history" style="color: var(--primary-light);"></i> Recently Registered Batches
+      </h3>
+      <a href="{{ url_for('medicines') }}" style="font-size: 13px; color: var(--secondary);">Full Inventory &rarr;</a>
+    </div>
+
+    {% if recently_added %}
+      <div class="table-container">
+        <table class="medical-table">
+          <thead>
+            <tr>
+              <th>Medicine</th>
+              <th>Batch</th>
+              <th>Qty</th>
+              <th>Expiry</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for med in recently_added %}
+              <tr class="{% if med.is_expired %}row-expired{% endif %}">
+                <td>
+                  <strong>{{ med.name }}</strong>
+                  <div style="font-size: 11px; color: var(--text-dim);">{{ med.category }}</div>
+                </td>
+                <td><span class="batch-tag">{{ med.batch_number }}</span></td>
+                <td>
+                  <strong style="color: {% if med.is_low_stock %}var(--status-lowstock){% else %}var(--text-main){% endif %};">
+                    {{ med.quantity }}
+                  </strong>
+                </td>
+                <td>{{ med.expiry_date }}</td>
+                <td>
+                  <span class="badge {{ med.badge_class }}">{{ med.status }}</span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <div class="empty-icon-wrap"><i class="fas fa-pills"></i></div>
+        <h3>No medicines yet</h3>
+        <p>Register your first medicine batch to begin tracking.</p>
+        <a href="{{ url_for('add_medicine') }}" class="btn btn-primary btn-sm"><i class="fas fa-plus"></i> Add Medicine</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Medical Expiry Tracker{% endblock %} | 3D Inventory System</title>
+  
+  <!-- Modern Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Core Design System CSS -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+  <!-- Ambient 3D Mesh Lighting -->
+  <div class="ambient-glow glow-primary"></div>
+  <div class="ambient-glow glow-secondary"></div>
+
+  <!-- Mobile Sidebar Backdrop -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+  <!-- Flash Toast Notifications -->
+  <div class="toast-container" id="toastContainer">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="toast toast-{{ category }}">
+            <i class="fas {% if category == 'success' %}fa-check-circle text-success{% elif category == 'danger' %}fa-exclamation-triangle text-danger{% elif category == 'warning' %}fa-clock text-warning{% else %}fa-info-circle text-info{% endif %}"></i>
+            <div>{{ message }}</div>
+            <button type="button" class="toast-close"><i class="fas fa-times"></i></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+  </div>
+
+  <div class="app-wrapper">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-badge">
+          <i class="fas fa-prescription-bottle-alt"></i>
+        </div>
+        <div class="brand-text">
+          <h1>ApexMed</h1>
+          <span>Expiry Tracker 3D</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-menu">
+        <div class="menu-label">Main Navigation</div>
+        <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
+          <i class="fas fa-chart-pie"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="{{ url_for('medicines') }}" class="nav-link {% if request.endpoint in ['medicines', 'edit_medicine'] %}active{% endif %}">
+          <i class="fas fa-pills"></i>
+          <span>Medicine Inventory</span>
+        </a>
+        <a href="{{ url_for('add_medicine') }}" class="nav-link {% if request.endpoint == 'add_medicine' %}active{% endif %}">
+          <i class="fas fa-plus-circle"></i>
+          <span>Add Medicine</span>
+        </a>
+        <a href="{{ url_for('alerts') }}" class="nav-link {% if request.endpoint == 'alerts' %}active{% endif %}">
+          <i class="fas fa-bell"></i>
+          <span>Expiry Alerts</span>
+          {% if unread_alerts_count > 0 %}
+            <span class="nav-badge" id="navAlertBadge">{{ unread_alerts_count }}</span>
+          {% endif %}
+        </a>
+
+        <div class="menu-label">Audit & Intelligence</div>
+        <a href="{{ url_for('reports') }}" class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}">
+          <i class="fas fa-file-invoice"></i>
+          <span>Reports Studio</span>
+        </a>
+        <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">
+          <i class="fas fa-sliders-h"></i>
+          <span>System Settings</span>
+        </a>
+
+        <div class="menu-label">Session</div>
+        <a href="{{ url_for('logout') }}" class="nav-link">
+          <i class="fas fa-sign-out-alt"></i>
+          <span>Sign Out</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-snippet">
+          <div class="user-avatar">
+            {{ current_user.full_name[:1] if current_user else 'U' }}
+          </div>
+          <div class="user-details">
+            <div class="user-name">{{ current_user.full_name if current_user else 'Pharmacist' }}</div>
+            <div class="user-role">{{ current_user.role if current_user else 'Medical Staff' }}</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Container -->
+    <div class="main-content">
+      <!-- Top Sticky Navigation Bar -->
+      <header class="top-navbar">
+        <div class="nav-left">
+          <button type="button" class="menu-toggle-btn" id="mobileMenuToggle" aria-label="Toggle Navigation">
+            <i class="fas fa-bars"></i>
+          </button>
+          
+          <form action="{{ url_for('medicines') }}" method="GET" class="quick-search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" name="search" id="quickSearchInput" placeholder="Quick search medicine, batch, or manufacturer... (Ctrl + /)" value="{{ request.args.get('search', '') }}">
+          </form>
+        </div>
+
+        <div class="nav-right">
+          <div class="date-indicator">
+            <i class="far fa-calendar-alt"></i>
+            <span>{{ today_str }}</span>
+          </div>
+
+          <a href="{{ url_for('alerts') }}" class="icon-button" title="Expiry Alerts">
+            <i class="far fa-bell"></i>
+            {% if unread_alerts_count > 0 %}
+              <span class="icon-badge" id="headerAlertBadge">{{ unread_alerts_count }}</span>
+            {% endif %}
+          </a>
+
+          <a href="{{ url_for('add_medicine') }}" class="btn btn-primary btn-sm">
+            <i class="fas fa-plus"></i>
+            <span>Add Medicine</span>
+          </a>
+        </div>
+      </header>
+
+      <!-- Page Body Block -->
+      <main class="content-body">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <!-- Reusable Global Medicine Details Modal -->
+  <div class="modal-backdrop" id="medicineDetailsModal">
+    <div class="glass-modal">
+      <div class="modal-header">
+        <h3><i class="fas fa-capsules" style="color: var(--secondary); margin-right: 8px;"></i> Medicine Batch Details</h3>
+        <button type="button" class="modal-close-btn" data-close-modal>&times;</button>
+      </div>
+      <div class="modal-body" id="medicineModalContent">
+        <!-- Injected via AJAX in app.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Reusable Global Delete Confirmation Modal -->
+  <div class="modal-backdrop" id="deleteConfirmModal">
+    <div class="glass-modal" style="max-width: 440px;">
+      <div class="modal-header">
+        <h3 style="color: #f87171;"><i class="fas fa-exclamation-triangle" style="margin-right: 8px;"></i> Confirm Deletion</h3>
+        <button type="button" class="modal-close-btn" data-close-modal>&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center; padding: 24px;">
+        <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; color: var(--status-danger); font-size: 26px;">
+          <i class="fas fa-trash-alt"></i>
+        </div>
+        <p style="font-size: 15px; margin-bottom: 8px;">Are you sure you want to permanently remove <strong id="deleteTargetName">this medicine</strong> from inventory?</p>
+        <p style="font-size: 12px; color: var(--text-dim);">This action will also delete all associated expiry alerts and cannot be reversed.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-danger btn-sm" id="confirmDeleteActionBtn">Yes, Delete Medicine</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Core Scripts -->
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/validation.js') }}"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

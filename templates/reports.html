@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Reports & Audit Studio{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title-group">
+    <h2><i class="fas fa-file-invoice" style="color: var(--secondary); margin-right: 10px;"></i> Reports & Audit Studio</h2>
+    <p>Generate audit-ready regulatory reports, distributor clearance sheets, and inventory valuations.</p>
+  </div>
+  <div class="page-actions">
+    <a href="{{ url_for('export_csv', type=report_type) }}" class="btn btn-secondary">
+      <i class="fas fa-file-csv"></i> Download CSV
+    </a>
+    <a href="{{ url_for('print_report', type=report_type) }}" target="_blank" class="btn btn-primary">
+      <i class="fas fa-print"></i> Print / Save as PDF
+    </a>
+  </div>
+</div>
+
+<!-- Report Segment Selector Tabs -->
+<div class="glass-card toolbar-card" style="margin-bottom: 24px;">
+  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+    <a href="{{ url_for('reports', type='expiring_soon') }}" class="btn {% if report_type == 'expiring_soon' %}btn-primary{% else %}btn-secondary{% endif %} btn-sm">
+      <i class="fas fa-hourglass-half"></i> Expiring Soon (Next {{ warning_days }}d)
+    </a>
+    <a href="{{ url_for('reports', type='expired') }}" class="btn {% if report_type == 'expired' %}btn-danger{% else %}btn-secondary{% endif %} btn-sm">
+      <i class="fas fa-ban"></i> Expired (Disposal Audit)
+    </a>
+    <a href="{{ url_for('reports', type='low_stock') }}" class="btn {% if report_type == 'low_stock' %}btn-primary{% else %}btn-secondary{% endif %} btn-sm" style="{% if report_type == 'low_stock' %}background: var(--status-lowstock); border-color: var(--status-lowstock); color:#fff;{% endif %}">
+      <i class="fas fa-boxes"></i> Low Stock (Reorder List)
+    </a>
+    <a href="{{ url_for('reports', type='all') }}" class="btn {% if report_type == 'all' %}btn-primary{% else %}btn-secondary{% endif %} btn-sm">
+      <i class="fas fa-list"></i> Full Inventory Valuation
+    </a>
+
+    <!-- Category selector -->
+    <select class="filter-select" onchange="if(this.value) window.location.href='{{ url_for('reports') }}?type=' + this.value" style="margin-left: 6px;">
+      <option value="">-- By Category --</option>
+      {% for cat in categories %}
+        <option value="cat_{{ cat }}" {% if report_type == 'cat_' + cat %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- Report Summary Metrics -->
+<div class="stats-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 24px;">
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-blue"><i class="fas fa-clipboard-list"></i></div>
+      <span class="stat-pill pill-neutral">Audited Batches</span>
+    </div>
+    <div class="stat-value">{{ total_count }}</div>
+    <div class="stat-label">Batches in this Report</div>
+  </div>
+
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-cyan"><i class="fas fa-calculator"></i></div>
+      <span class="stat-pill pill-neutral">Valuation</span>
+    </div>
+    <div class="stat-value">${{ "%.2f"|format(total_valuation) }}</div>
+    <div class="stat-label">Total Cost Valuation of Inventory</div>
+  </div>
+
+  <div class="stat-card-3d">
+    <div class="stat-top">
+      <div class="stat-icon icon-green"><i class="fas fa-file-signature"></i></div>
+      <span class="stat-pill pill-success">Compliance</span>
+    </div>
+    <div class="stat-value">Audit Ready</div>
+    <div class="stat-label">Exportable to CSV & Printable PDF</div>
+  </div>
+</div>
+
+<!-- Report Table -->
+<div class="glass-card" style="padding: 24px;">
+  {% if medicines %}
+    <div class="table-container">
+      <table class="medical-table">
+        <thead>
+          <tr>
+            <th>Medicine Name</th>
+            <th>Batch No.</th>
+            <th>Category</th>
+            <th>Manufacturer</th>
+            <th>Stock</th>
+            <th>Unit Cost</th>
+            <th>Subtotal</th>
+            <th>Expiry Date</th>
+            <th>Days Left</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for med in medicines %}
+            <tr class="{% if med.is_expired %}row-expired{% endif %}">
+              <td data-label="Medicine Name">
+                <strong>{{ med.name }}</strong>
+                {% if med.supplier %}
+                  <div style="font-size: 11px; color: var(--text-dim);">Supplier: {{ med.supplier }}</div>
+                {% endif %}
+              </td>
+              <td data-label="Batch No."><span class="batch-tag">{{ med.batch_number }}</span></td>
+              <td data-label="Category">{{ med.category }}</td>
+              <td data-label="Manufacturer">{{ med.manufacturer }}</td>
+              <td data-label="Stock"><strong>{{ med.quantity }}</strong></td>
+              <td data-label="Unit Cost">${{ "%.2f"|format(med.purchase_price) }}</td>
+              <td data-label="Subtotal" style="font-weight: 600; color: #38bdf8;">
+                ${{ "%.2f"|format(med.quantity * med.purchase_price) }}
+              </td>
+              <td data-label="Expiry Date"><strong>{{ med.expiry_date }}</strong></td>
+              <td data-label="Days Left">
+                {% if med.is_expired %}
+                  <span style="color: var(--status-danger); font-weight: 600;">{{ med.days_remaining|abs }}d ago</span>
+                {% elif med.is_expiring_soon %}
+                  <span style="color: var(--status-warning); font-weight: 600;">{{ med.days_remaining }}d left</span>
+                {% else %}
+                  <span style="color: var(--status-safe); font-weight: 600;">{{ med.days_remaining }}d left</span>
+                {% endif %}
+              </td>
+              <td data-label="Status">
+                <span class="badge {{ med.badge_class }}">{{ med.status }}</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-icon-wrap"><i class="fas fa-file-excel"></i></div>
+      <h3>No records in this report</h3>
+      <p>No medicines match the selected report segment.</p>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

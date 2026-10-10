@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In | Medical Expiry Tracker 3D</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+  <div class="ambient-glow glow-primary"></div>
+  <div class="ambient-glow glow-secondary"></div>
+
+  <!-- Flash Toast Notifications -->
+  <div class="toast-container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="toast toast-{{ category }}">
+            <i class="fas {% if category == 'success' %}fa-check-circle text-success{% elif category == 'danger' %}fa-exclamation-triangle text-danger{% else %}fa-info-circle text-info{% endif %}"></i>
+            <div>{{ message }}</div>
+            <button type="button" class="toast-close"><i class="fas fa-times"></i></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+  </div>
+
+  <div class="auth-page-wrapper">
+    <div class="auth-container">
+      
+      <!-- Left 3D Hero Panel -->
+      <div class="auth-hero-panel">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="logo-badge">
+            <i class="fas fa-prescription-bottle-alt"></i>
+          </div>
+          <div class="brand-text">
+            <h1 style="font-size: 20px;">ApexMed</h1>
+            <span>Smart 3D Inventory</span>
+          </div>
+        </div>
+
+        <!-- 3D Rotating Medicine Capsule Visual -->
+        <div class="capsule-3d-scene">
+          <div class="orbit-ring"></div>
+          <div class="capsule-orbit-container">
+            <div class="capsule-core"></div>
+            <!-- Orbiting medical motif nodes -->
+            <div class="floating-icon-node node-1" title="Security & Shield"><i class="fas fa-shield-alt"></i></div>
+            <div class="floating-icon-node node-2" title="Expiry Calendar"><i class="far fa-calendar-check"></i></div>
+            <div class="floating-icon-node node-3" title="Real-time Clock"><i class="far fa-clock"></i></div>
+            <div class="floating-icon-node node-4" title="Urgent Alerts"><i class="fas fa-bell"></i></div>
+          </div>
+        </div>
+
+        <div class="hero-tagline">
+          <h2>Never miss a medicine expiry.</h2>
+          <p>Intelligent batch lifecycle management, automated threshold warnings, and audit-ready regulatory reporting for modern healthcare facilities.</p>
+        </div>
+      </div>
+
+      <!-- Right Authentication Form Panel -->
+      <div class="auth-form-panel">
+        {% if register_mode %}
+          <!-- Registration Mode -->
+          <div class="auth-header">
+            <h2>Create Staff Account</h2>
+            <p>Register as a pharmacist or dispensary manager.</p>
+          </div>
+
+          <form action="{{ url_for('register') }}" method="POST">
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="full_name">Full Name <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <i class="fas fa-user input-icon"></i>
+                <input type="text" name="full_name" id="full_name" class="form-control" placeholder="Dr. Jane Doe" required>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="username">Username <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <i class="fas fa-at input-icon"></i>
+                <input type="text" name="username" id="username" class="form-control" placeholder="janedoe" required>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="email">Work Email <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <i class="fas fa-envelope input-icon"></i>
+                <input type="email" name="email" id="email" class="form-control" placeholder="jane@hospital.org" required>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="role">Role / Department</label>
+              <div class="input-wrapper">
+                <i class="fas fa-id-badge input-icon"></i>
+                <select name="role" id="role" class="form-control">
+                  <option value="Chief Pharmacist">Chief Pharmacist</option>
+                  <option value="Pharmacy Staff">Pharmacy Staff</option>
+                  <option value="Dispensary Manager">Dispensary Manager</option>
+                  <option value="Clinic Administrator">Clinic Administrator</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 22px;">
+              <label for="password">Password <span class="required">*</span></label>
+              <div class="input-wrapper">
+                <i class="fas fa-lock input-icon"></i>
+                <input type="password" name="password" id="password" class="form-control" placeholder="••••••••" required minlength="6">
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">
+              <i class="fas fa-user-plus"></i> Complete Registration
+            </button>
+
+            <div style="margin-top: 20px; text-align: center; font-size: 13px; color: var(--text-muted);">
+              Already have an account? <a href="{{ url_for('login') }}">Sign In here</a>
+            </div>
+          </form>
+
+        {% elif forgot_mode %}
+          <!-- Forgot Password Mode -->
+          <div class="auth-header">
+            <h2>Reset Password</h2>
+            <p>Enter your email to receive recovery instructions.</p>
+          </div>
+
+          <form action="{{ url_for('forgot_password') }}" method="POST">
+            <div class="form-group" style="margin-bottom: 22px;">
+              <label for="reset_email">Registered Email Address</label>
+              <div class="input-wrapper">
+                <i class="fas fa-envelope input-icon"></i>
+                <input type="email" name="email" id="reset_email" class="form-control" placeholder="admin@apexmed.com" required>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">
+              <i class="fas fa-paper-plane"></i> Send Reset Link
+            </button>
+
+            <div style="margin-top: 20px; text-align: center; font-size: 13px; color: var(--text-muted);">
+              Remember your password? <a href="{{ url_for('login') }}">Back to Login</a>
+            </div>
+          </form>
+
+        {% else %}
+          <!-- Standard Login Mode -->
+          <div class="auth-header">
+            <h2>Welcome Back</h2>
+            <p>Access your medical inventory and expiry alerts.</p>
+          </div>
+
+          <form action="{{ url_for('login') }}" method="POST" id="loginForm">
+            <div class="form-group" style="margin-bottom: 18px;">
+              <label for="loginIdentity">Username or Email</label>
+              <div class="input-wrapper">
+                <i class="fas fa-user-md input-icon"></i>
+                <input type="text" name="identity" id="loginIdentity" class="form-control" placeholder="e.g. admin or admin@apexmed.com" value="{{ identity if identity else '' }}" required autofocus>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 18px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label for="loginPassword">Password</label>
+                <a href="{{ url_for('forgot_password') }}" style="font-size: 12px; color: var(--secondary);">Forgot Password?</a>
+              </div>
+              <div class="input-wrapper">
+                <i class="fas fa-lock input-icon"></i>
+                <input type="password" name="password" id="loginPassword" class="form-control" placeholder="••••••••" required>
+              </div>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); cursor: pointer;">
+                <input type="checkbox" name="remember" id="remember" style="accent-color: var(--secondary);">
+                Remember me on this workstation
+              </label>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">
+              <i class="fas fa-sign-in-alt"></i> Sign In to Dashboard
+            </button>
+          </form>
+
+          {% if not config.get('IS_PRODUCTION') %}
+            <div class="demo-credentials-callout">
+              <div>
+                <strong>Demo Credentials:</strong> <code>admin</code> / <code>admin123</code>
+              </div>
+              <button type="button" class="btn-fill-demo" id="btnFillDemo">
+                <i class="fas fa-magic"></i> Auto Fill
+              </button>
+            </div>
+          {% endif %}
+
+          <div style="margin-top: 24px; text-align: center; font-size: 13px; color: var(--text-muted);">
+            Don't have an account? <a href="{{ url_for('register') }}">Register new account</a>
+          </div>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% if not config.get('IS_PRODUCTION') %}
+    <script>
+      const fillBtn = document.getElementById("btnFillDemo");
+      if (fillBtn) {
+        fillBtn.addEventListener("click", () => {
+          document.getElementById("loginIdentity").value = "admin";
+          document.getElementById("loginPassword").value = "admin123";
+        });
+      }
+    </script>
+  {% endif %}
+</body>
+</html>

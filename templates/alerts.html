@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Expiry & Stock Alerts{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title-group">
+    <h2><i class="fas fa-bell text-warning" style="margin-right: 10px;"></i> Alert & Surveillance Center</h2>
+    <p>Proactive alerts for expired batches, impending shelf-life expirations, and critical stock depletion.</p>
+  </div>
+  <div class="page-actions">
+    {% if alerts %}
+      <form action="{{ url_for('mark_all_alerts_read') }}" method="POST" style="display:inline;">
+        <button type="submit" class="btn btn-secondary btn-sm">
+          <i class="fas fa-check-double"></i> Mark All as Read
+        </button>
+      </form>
+      <form action="{{ url_for('clear_all_alerts') }}" method="POST" style="display:inline;" onsubmit="return confirm('Clear all alert notifications?');">
+        <button type="submit" class="btn btn-outline-danger btn-sm">
+          <i class="fas fa-trash-alt"></i> Clear All Alerts
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Filter Tabs Toolbar -->
+<div class="glass-card toolbar-card" style="margin-bottom: 24px;">
+  <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+    <a href="{{ url_for('alerts') }}" class="btn {% if not current_filter %}btn-primary{% else %}btn-secondary{% endif %} btn-sm">
+      All Alerts ({{ total_count }})
+    </a>
+    <a href="{{ url_for('alerts', type='EXPIRED') }}" class="btn {% if current_filter == 'EXPIRED' %}btn-danger{% else %}btn-secondary{% endif %} btn-sm">
+      <i class="fas fa-ban"></i> Expired Only
+    </a>
+    <a href="{{ url_for('alerts', type='EXPIRING_SOON') }}" class="btn {% if current_filter == 'EXPIRING_SOON' %}btn-primary{% else %}btn-secondary{% endif %} btn-sm" style="{% if current_filter == 'EXPIRING_SOON' %}background: var(--status-warning); border-color: var(--status-warning); color: #000;{% endif %}">
+      <i class="fas fa-hourglass-half"></i> Expiring Soon
+    </a>
+    <a href="{{ url_for('alerts', type='LOW_STOCK') }}" class="btn {% if current_filter == 'LOW_STOCK' %}btn-primary{% else %}btn-secondary{% endif %} btn-sm" style="{% if current_filter == 'LOW_STOCK' %}background: var(--status-lowstock); border-color: var(--status-lowstock); color: #fff;{% endif %}">
+      <i class="fas fa-boxes"></i> Low Stock
+    </a>
+  </div>
+
+  <div style="margin-left: auto; font-size: 13px; color: var(--text-muted);">
+    Unread notifications: <strong style="color: var(--status-danger);">{{ unread_count }}</strong>
+  </div>
+</div>
+
+<!-- Alerts Feed List -->
+<div class="glass-card" style="padding: 24px;">
+  {% if alerts %}
+    <div class="alerts-list">
+      {% for alert in alerts %}
+        <div class="alert-item-card {% if alert.is_read == 0 %}unread{% endif %}">
+          <!-- Icon -->
+          <div class="alert-icon-wrap {% if alert.type == 'EXPIRED' %}icon-red{% elif alert.type == 'EXPIRING_SOON' %}icon-amber{% else %}icon-orange{% endif %}">
+            <i class="fas {% if alert.type == 'EXPIRED' %}fa-ban{% elif alert.type == 'EXPIRING_SOON' %}fa-clock{% else %}fa-exclamation-triangle{% endif %}"></i>
+          </div>
+
+          <!-- Content -->
+          <div class="alert-item-content">
+            <div class="alert-item-header">
+              <div>
+                <span class="badge {% if alert.type == 'EXPIRED' %}badge-expired{% elif alert.type == 'EXPIRING_SOON' %}badge-expiring{% else %}badge-lowstock{% endif %}" style="margin-right: 8px;">
+                  {{ alert.type.replace('_', ' ') }}
+                </span>
+                <strong style="font-size: 14px;">{{ alert.medicine_name or 'Medicine' }}</strong>
+                {% if alert.batch_number %}
+                  <span class="batch-tag" style="margin-left: 6px;">{{ alert.batch_number }}</span>
+                {% endif %}
+              </div>
+              <span class="alert-time">{{ alert.created_at[:16] }}</span>
+            </div>
+
+            <p class="alert-message" style="margin-top: 6px;">{{ alert.message }}</p>
+
+            <div class="alert-actions">
+              {% if alert.medicine_id %}
+                <button type="button" class="btn btn-secondary btn-sm" onclick="viewMedicineDetails({{ alert.medicine_id }})">
+                  <i class="fas fa-eye"></i> View Medicine Dossier
+                </button>
+              {% endif %}
+
+              {% if alert.is_read == 0 %}
+                <button type="button" class="btn btn-secondary btn-sm" onclick="markAlertAsRead({{ alert.id }}, this)">
+                  <i class="fas fa-check"></i> Mark as Read
+                </button>
+              {% endif %}
+
+              <form action="{{ url_for('delete_alert', id=alert.id) }}" method="POST" style="display:inline;">
+                <button type="submit" class="btn btn-secondary btn-sm" title="Dismiss Alert" style="color: var(--text-dim);">
+                  <i class="fas fa-times"></i> Dismiss
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-icon-wrap" style="color: var(--status-safe);"><i class="fas fa-check-circle"></i></div>
+      <h3>All clear! No alerts found.</h3>
+      <p>There are currently no active warnings for this category. All monitored batches meet inventory safety standards.</p>
+      <a href="{{ url_for('dashboard') }}" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Return to Dashboard</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

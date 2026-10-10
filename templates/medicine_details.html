@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}{{ medicine.name }} – Details{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title-group">
+    <h2><i class="fas fa-file-medical-alt" style="color: var(--secondary); margin-right: 10px;"></i> {{ medicine.name }}</h2>
+    <p>Complete pharmaceutical batch profile and shelf-life telemetry.</p>
+  </div>
+  <div class="page-actions">
+    <a href="{{ url_for('edit_medicine', id=medicine.id) }}" class="btn btn-secondary">
+      <i class="fas fa-edit"></i> Edit Medicine
+    </a>
+    <a href="{{ url_for('medicines') }}" class="btn btn-secondary">
+      <i class="fas fa-arrow-left"></i> Back to Inventory
+    </a>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+  <!-- Left: Main Medicine Profile -->
+  <div class="glass-card" style="padding: 32px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+      <div>
+        <h3 style="font-size: 24px; font-weight: 700;">{{ medicine.name }}</h3>
+        <p style="color: var(--text-muted); font-size: 14px; margin-top: 4px;">
+          Category: <strong>{{ medicine.category }}</strong> • Producer: <strong>{{ medicine.manufacturer }}</strong>
+        </p>
+      </div>
+      <div>
+        <span class="badge {{ medicine.badge_class }}" style="font-size: 14px; padding: 8px 14px;">
+          {{ medicine.badge_text }}
+        </span>
+        {% if medicine.is_low_stock %}
+          <span class="badge badge-lowstock" style="font-size: 14px; padding: 8px 14px; margin-left: 8px;">
+            <i class="fas fa-box"></i> LOW STOCK
+          </span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- 4-Box Key Stats -->
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px;">
+      <div style="background: rgba(255,255,255,0.03); padding: 18px; border-radius: 12px; border: 1px solid var(--border-glass);">
+        <span style="font-size: 12px; text-transform: uppercase; color: var(--text-dim); display:block;">Batch / Lot Identification</span>
+        <span class="batch-tag" style="font-size: 16px; display:inline-block; margin-top: 6px;">{{ medicine.batch_number }}</span>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.03); padding: 18px; border-radius: 12px; border: 1px solid var(--border-glass);">
+        <span style="font-size: 12px; text-transform: uppercase; color: var(--text-dim); display:block;">Current Physical Inventory</span>
+        <span style="font-size: 22px; font-weight: 800; color: {% if medicine.is_low_stock %}var(--status-lowstock){% else %}#ffffff{% endif %}; display:block; margin-top: 4px;">
+          {{ medicine.quantity }} units <small style="font-size: 13px; font-weight: 400; color: var(--text-dim);">(Min Reorder Level: {{ medicine.minimum_stock }})</small>
+        </span>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.03); padding: 18px; border-radius: 12px; border: 1px solid var(--border-glass);">
+        <span style="font-size: 12px; text-transform: uppercase; color: var(--text-dim); display:block;">Manufacturing Date</span>
+        <span style="font-size: 16px; font-weight: 600; display:block; margin-top: 6px;"><i class="far fa-calendar-alt text-muted"></i> {{ medicine.manufacturing_date }}</span>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.03); padding: 18px; border-radius: 12px; border: 1px solid var(--border-glass);">
+        <span style="font-size: 12px; text-transform: uppercase; color: var(--text-dim); display:block;">Official Expiry Date</span>
+        <span style="font-size: 16px; font-weight: 700; color: {% if medicine.is_expired %}var(--status-danger){% elif medicine.is_expiring_soon %}var(--status-warning){% else %}var(--status-safe){% endif %}; display:block; margin-top: 6px;">
+          <i class="far fa-calendar-times"></i> {{ medicine.expiry_date }}
+          <span style="font-size: 12px; font-weight: 500; margin-left: 6px;">
+            {% if medicine.is_expired %}
+              ({{ medicine.days_remaining|abs }} days overdue)
+            {% else %}
+              ({{ medicine.days_remaining }} days remaining)
+            {% endif %}
+          </span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Commercial Financials -->
+    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-glass); border-radius: 14px; padding: 20px; margin-bottom: 24px;">
+      <h4 style="font-size: 14px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 14px;">Financial & Valuation Telemetry</h4>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: center;">
+        <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 10px;">
+          <div style="font-size: 12px; color: var(--text-muted);">Purchase Cost</div>
+          <div style="font-size: 18px; font-weight: 700; margin-top: 4px;">${{ "%.2f"|format(medicine.purchase_price) }}</div>
+        </div>
+        <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 10px;">
+          <div style="font-size: 12px; color: var(--text-muted);">Retail Selling Price</div>
+          <div style="font-size: 18px; font-weight: 700; color: var(--status-safe); margin-top: 4px;">${{ "%.2f"|format(medicine.selling_price) }}</div>
+        </div>
+        <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: 10px;">
+          <div style="font-size: 12px; color: var(--text-muted);">Total Batch Value</div>
+          <div style="font-size: 18px; font-weight: 700; color: #38bdf8; margin-top: 4px;">${{ "%.2f"|format(medicine.quantity * medicine.purchase_price) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clinical Storage Notes -->
+    {% if medicine.description %}
+      <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass); border-radius: 14px; padding: 20px;">
+        <h4 style="font-size: 14px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px;">Storage Instructions & Clinical Precautions</h4>
+        <p style="color: var(--text-muted); font-size: 14px; line-height: 1.6;">{{ medicine.description }}</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Supplier & Associated Alerts Feed -->
+  <div style="display: flex; flex-direction: column; gap: 24px;">
+    <!-- Supplier Card -->
+    <div class="glass-card" style="padding: 24px;">
+      <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px;">
+        <i class="fas fa-truck-loading" style="color: var(--secondary);"></i> Supplier Details
+      </h3>
+      <p style="font-size: 14px; color: var(--text-main); font-weight: 500;">
+        {{ medicine.supplier or 'No dedicated distributor recorded.' }}
+      </p>
+      <div style="margin-top: 14px; font-size: 12px; color: var(--text-dim);">
+        Registered in system: {{ medicine.created_at[:10] }}
+      </div>
+    </div>
+
+    <!-- Active Alerts for this Batch -->
+    <div class="glass-card" style="padding: 24px; flex: 1;">
+      <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+        <i class="fas fa-bell text-warning"></i> Active Batch Alerts
+      </h3>
+
+      {% if alerts %}
+        <div class="alerts-list">
+          {% for a in alerts %}
+            <div class="alert-item-card {% if a.is_read == 0 %}unread{% endif %}">
+              <div class="alert-icon-wrap {% if a.type == 'EXPIRED' %}icon-red{% elif a.type == 'EXPIRING_SOON' %}icon-amber{% else %}icon-orange{% endif %}" style="width:34px; height:34px; font-size:14px;">
+                <i class="fas {% if a.type == 'EXPIRED' %}fa-ban{% elif a.type == 'EXPIRING_SOON' %}fa-clock{% else %}fa-box{% endif %}"></i>
+              </div>
+              <div class="alert-item-content">
+                <div class="alert-item-header">
+                  <span style="font-size: 13px; font-weight: 600;">{{ a.type.replace('_', ' ') }}</span>
+                </div>
+                <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">{{ a.message }}</p>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="text-align: center; padding: 30px 10px; color: var(--text-dim);">
+          <i class="fas fa-check-circle" style="font-size: 28px; color: var(--status-safe); margin-bottom: 10px; display: block;"></i>
+          <span style="font-size: 13px;">No active alerts for this batch.</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
