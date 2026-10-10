@@ -40,7 +40,7 @@ sequenceDiagram
     actor User as Staff / Manager
     participant UI as Login View
     participant Auth as Flask Auth Handler
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore production)
 
     User->>UI: Enters Email / Username & Password
     User->>UI: Toggles "Remember Me" (Optional)
@@ -69,7 +69,7 @@ sequenceDiagram
     participant Valid as Validation Module
     participant Flask as Flask Controller
     participant Engine as Expiry & Stock Engine
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore production)
 
     User->>UI: Fills Medicine Details (Name, Batch, Dates, Qty, Prices)
     User->>UI: Clicks "Save Medicine"
@@ -99,7 +99,7 @@ sequenceDiagram
     participant Header as Global Navigation Bar
     participant AlertUI as Alerts Center View
     participant Flask as Flask Controller
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore production)
 
     User->>Header: Sees red/amber badge with unread alert count (e.g., "5")
     User->>Header: Clicks Notification Bell / Alerts link
@@ -148,7 +148,7 @@ sequenceDiagram
     participant ReportUI as Reports Studio View
     participant Flask as Flask Controller
     participant Exporter as CSV / Print Engine
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore production)
 
     User->>ReportUI: Selects Report Type ("Expiring Soon", "Expired Batches", "Low Stock")
     alt Clicks "Export CSV"
@@ -173,7 +173,7 @@ sequenceDiagram
     participant SettingsUI as Settings View
     participant Flask as Flask Controller
     participant Engine as Expiry Calculation Engine
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore production)
 
     Admin->>SettingsUI: Changes Expiry Warning Window from 30 days to 45 days
     Admin->>SettingsUI: Clicks "Save Configuration"

@@ -1,35 +1,84 @@
 import os
 import sqlite3
 import datetime
+import hashlib
+import json
+import threading
+from datetime import timezone
 from werkzeug.security import generate_password_hash
 
 DB_PATH = os.environ.get("DATABASE_PATH", "database.db")
+_firestore_db = None
+_firestore_lock = threading.Lock()
 
 
-def uses_remote_database():
-    return bool(os.environ.get("TURSO_DATABASE_URL"))
+def uses_firebase():
+    return bool(
+        os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
+        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
+
+
+def _firestore():
+    global _firestore_db
+    if _firestore_db is None:
+        with _firestore_lock:
+            if _firestore_db is None:
+                import firebase_admin
+                from firebase_admin import credentials, firestore
+
+                try:
+                    firebase_admin.get_app()
+                except ValueError:
+                    service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
+                    if service_account_json:
+                        try:
+                            service_account = json.loads(service_account_json)
+                        except json.JSONDecodeError as exc:
+                            raise RuntimeError(
+                                "FIREBASE_SERVICE_ACCOUNT_KEY must contain valid service-account JSON."
+                            ) from exc
+                        credential = credentials.Certificate(service_account)
+                    else:
+                        credential = credentials.ApplicationDefault()
+
+                    firebase_admin.initialize_app(
+                        credential,
+                        options={"projectId": os.environ.get("FIREBASE_PROJECT_ID")}
+                        if os.environ.get("FIREBASE_PROJECT_ID")
+                        else None,
+                    )
+
+                _firestore_db = firestore.client()
+    return _firestore_db
+
+
+def _timestamp():
+    return datetime.datetime.now(timezone.utc).isoformat()
+
+
+def _collection(name):
+    return _firestore().collection(name)
+
+
+def _firebase_next_id(name):
+    from firebase_admin import firestore
+
+    counter = _collection("_counters").document(name)
+    transaction = _firestore().transaction()
+
+    @firestore.transactional
+    def increment(transaction):
+        snapshot = counter.get(transaction=transaction)
+        next_value = (snapshot.get("value") if snapshot.exists else 0) + 1
+        transaction.set(counter, {"value": next_value})
+        return next_value
+
+    return increment(transaction)
 
 def get_connection():
-    database_url = os.environ.get("TURSO_DATABASE_URL")
-    auth_token = os.environ.get("TURSO_AUTH_TOKEN")
-
-    if database_url or auth_token:
-        if not database_url or not auth_token:
-            raise RuntimeError(
-                "Both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be configured."
-            )
-
-        import turso_serverless
-
-        conn = turso_serverless.connect(database_url, auth_token=auth_token)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
-
-    if os.environ.get("VERCEL"):
-        raise RuntimeError(
-            "Configure TURSO_DATABASE_URL and TURSO_AUTH_TOKEN for Vercel deployments."
-        )
+    if uses_firebase() or os.environ.get("VERCEL"):
+        raise RuntimeError("Direct SQL connections are unavailable with the Firebase backend.")
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -37,8 +86,15 @@ def get_connection():
     return conn
 
 def init_db(force_reseed=False):
-    if force_reseed and uses_remote_database():
-        raise RuntimeError("Demo data reset is disabled for the persistent database.")
+    if uses_firebase():
+        if force_reseed:
+            raise RuntimeError("Demo data reset is disabled for the Firebase database.")
+        initialize_firebase_data()
+        return
+    if os.environ.get("VERCEL"):
+        raise RuntimeError(
+            "Configure Firebase Admin credentials to use Firestore on Vercel."
+        )
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -121,7 +177,7 @@ def init_db(force_reseed=False):
     # Seed Default User if not exists
     cursor.execute("SELECT COUNT(*) FROM users")
     user_count = cursor.fetchone()[0]
-    if (user_count == 0 or force_reseed) and not uses_remote_database():
+    if (user_count == 0 or force_reseed) and not uses_firebase():
         cursor.execute("DELETE FROM users")
         # Default admin user: admin / admin123
         demo_pwd_hash = generate_password_hash("admin123", method="pbkdf2:sha256")
@@ -165,7 +221,7 @@ def init_db(force_reseed=False):
     cursor.execute("SELECT COUNT(*) FROM medicines")
     med_count = cursor.fetchone()[0]
 
-    if (med_count == 0 or force_reseed) and not uses_remote_database():
+    if (med_count == 0 or force_reseed) and not uses_firebase():
         if force_reseed:
             cursor.execute("DELETE FROM medicines")
             cursor.execute("DELETE FROM alerts")
@@ -354,19 +410,30 @@ def calculate_medicine_status(expiry_date_str, quantity, minimum_stock, warning_
     }
 
 def get_settings():
+    if uses_firebase():
+        row = _collection("settings").document("1").get()
+        if row.exists:
+            return row.to_dict()
+        return _default_settings()
+
     conn = get_connection()
     row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
     conn.close()
     if row:
         return dict(row)
+    return _default_settings()
+
+
+def _default_settings():
     return {
+        "id": 1,
         "pharmacy_name": "Apex Medical Care & Pharmacy",
         "expiry_warning_days": 30,
         "low_stock_threshold": 15,
         "currency_symbol": "$",
         "theme": "dark-glass",
         "contact_email": "admin@apexmed.com",
-        "auto_alert": 1
+        "auto_alert": 1,
     }
 
 def refresh_alerts():
@@ -376,6 +443,41 @@ def refresh_alerts():
     - Expiring soon medicines have EXPIRING_SOON alerts
     - Low stock medicines have LOW_STOCK alerts
     """
+    if uses_firebase():
+        warning_days = get_settings().get("expiry_warning_days", 30)
+        medicines = get_medicines()
+        existing_keys = {
+            (str(row.get("medicine_id")), row.get("type"))
+            for row in _firebase_documents("alerts")
+        }
+        needed = []
+        for med in medicines:
+            calc = calculate_medicine_status(
+                med["expiry_date"], med["quantity"], med["minimum_stock"], warning_days
+            )
+            if calc["is_expired"]:
+                needed.append((
+                    med["id"], "EXPIRED",
+                    f"{med['name']} (Batch: {med['batch_number']}) has EXPIRED "
+                    f"({abs(calc['days_remaining'])} days ago). Quarantine immediately.",
+                ))
+            elif calc["is_expiring_soon"]:
+                needed.append((
+                    med["id"], "EXPIRING_SOON",
+                    f"{med['name']} (Batch: {med['batch_number']}) expires in "
+                    f"{calc['days_remaining']} days. Prioritize dispensing or initiate distributor return.",
+                ))
+            if calc["is_low_stock"]:
+                needed.append((
+                    med["id"], "LOW_STOCK",
+                    f"Low stock alert: {med['name']} has only {med['quantity']} units remaining "
+                    f"(Min threshold: {med['minimum_stock']}).",
+                ))
+        for medicine_id, alert_type, message in needed:
+            if (str(medicine_id), alert_type) not in existing_keys:
+                create_alert(medicine_id, alert_type, message)
+        return
+
     conn = get_connection()
     settings = get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
@@ -418,6 +520,560 @@ def refresh_alerts():
 
     conn.commit()
     conn.close()
+
+
+def create_alert(medicine_id, alert_type, message):
+    if uses_firebase():
+        alert_id = _firebase_next_id("alerts")
+        _collection("alerts").document(str(alert_id)).set({
+            "id": alert_id,
+            "medicine_id": medicine_id,
+            "type": alert_type,
+            "message": message,
+            "is_read": 0,
+            "created_at": _timestamp(),
+        })
+        return alert_id
+    conn = get_connection()
+    cursor = conn.execute(
+        "INSERT INTO alerts (medicine_id, type, message, is_read) VALUES (?, ?, ?, 0)",
+        (medicine_id, alert_type, message),
+    )
+    conn.commit()
+    alert_id = cursor.lastrowid
+    conn.close()
+    return alert_id
+
+
+def initialize_firebase_data():
+    client = _firestore()
+    settings_ref = client.collection("settings").document("1")
+    if not settings_ref.get().exists:
+        settings_ref.set(_default_settings())
+
+    categories = [
+        ("Antibiotics", "Broad and narrow spectrum bacterial infection treatments"),
+        ("Pain Relief & Analgesics", "Fever, headache, inflammation, and pain management"),
+        ("Cardiovascular & Hypertension", "Blood pressure, cardiac rhythm, and cholesterol control"),
+        ("Respiratory & Anti-Allergy", "Antihistamines, bronchodilators, and asthma inhalers"),
+        ("Diabetes & Endocrine", "Insulin, Metformin, and metabolic regulators"),
+        ("Gastrointestinal", "Antacids, proton-pump inhibitors, and digestive aids"),
+        ("Vitamins & Supplements", "Essential minerals, immunity boosters, and multivitamins"),
+        ("Dermatology & Topicals", "Topical corticosteroids, antifungals, and antiseptics"),
+    ]
+    suppliers = [
+        ("Medix Global Pharma Distributors", "contact@medixpharma.com", "+1 (555) 234-5678", "450 Innovation Parkway, New Jersey"),
+        ("Apex Bio-Health Supply Co.", "sales@apexbio.org", "+1 (555) 890-1234", "12 Healthcare Boulevard, Boston"),
+        ("Novis Life Sciences Logistics", "orders@novislife.com", "+1 (555) 456-7890", "88 Zenith Drive, Chicago"),
+        ("CureWell Wholesale Meds", "support@curewell.com", "+1 (555) 321-6540", "104 Gateway Plaza, Dallas"),
+    ]
+    for name, description in categories:
+        ref = client.collection("categories").document(name)
+        if not ref.get().exists:
+            ref.set({"name": name, "description": description})
+    for name, email, phone, address in suppliers:
+        ref = client.collection("suppliers").document(name)
+        if not ref.get().exists:
+            ref.set({"name": name, "contact_email": email, "phone": phone, "address": address})
+
+    for collection_name in ("users", "medicines", "alerts"):
+        counter_ref = client.collection("_counters").document(collection_name)
+        if not counter_ref.get().exists:
+            snapshots = client.collection(collection_name).stream()
+            max_id = max((int(item.id) for item in snapshots if item.id.isdigit()), default=0)
+            counter_ref.set({"value": max_id})
+
+
+def _firebase_documents(collection_name):
+    rows = []
+    for snapshot in _collection(collection_name).stream():
+        data = snapshot.to_dict() or {}
+        data.setdefault("id", int(snapshot.id) if snapshot.id.isdigit() else snapshot.id)
+        rows.append(data)
+    return rows
+
+
+def get_user_by_id(user_id):
+    if uses_firebase():
+        snapshot = _collection("users").document(str(user_id)).get()
+        return ({"id": int(user_id), **snapshot.to_dict()} if snapshot.exists else None)
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_by_identity(identity):
+    if uses_firebase():
+        for field in ("username", "email"):
+            result = _collection("users").where(field, "==", identity).limit(1).get()
+            if result:
+                snapshot = result[0]
+                user = snapshot.to_dict() or {}
+                user.setdefault("id", int(snapshot.id) if snapshot.id.isdigit() else snapshot.id)
+                return user
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM users WHERE username = ? OR email = ?", (identity, identity)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def find_user_conflict(username, email, exclude_id=None):
+    if uses_firebase():
+        for field, value in (("username", username), ("email", email)):
+            matches = _collection("users").where(field, "==", value).limit(1).get()
+            for snapshot in matches:
+                user = snapshot.to_dict() or {}
+                user_id = user.get("id", snapshot.id)
+                if str(user_id) != str(exclude_id):
+                    return True
+        return False
+    conn = get_connection()
+    if exclude_id is None:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE username = ? OR email = ?", (username, email)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE (username = ? OR email = ?) AND id != ?",
+            (username, email, exclude_id),
+        ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_user(user_data):
+    if uses_firebase():
+        client = _firestore()
+        from firebase_admin import firestore
+
+        normalized_keys = {
+            hashlib.sha256(f"{field}:{user_data[field].strip().casefold()}".encode()).hexdigest()
+            for field in ("username", "email")
+        }
+        user_id = _firebase_next_id("users")
+        transaction = client.transaction()
+
+        @firestore.transactional
+        def reserve_keys(transaction):
+            refs = [client.collection("_user_keys").document(key) for key in normalized_keys]
+            if any(ref.get(transaction=transaction).exists for ref in refs):
+                raise ValueError("Username or email already registered.")
+            user_ref = client.collection("users").document(str(user_id))
+            transaction.set(user_ref, {"id": user_id, **user_data})
+            for ref in refs:
+                transaction.set(ref, {"user_id": user_id})
+            return user_id
+
+        return reserve_keys(transaction)
+
+    conn = get_connection()
+    cursor = conn.execute(
+        """INSERT INTO users (full_name, username, email, password_hash, role)
+           VALUES (?, ?, ?, ?, ?)""",
+        (
+            user_data["full_name"], user_data["username"], user_data["email"],
+            user_data["password_hash"], user_data.get("role", "Pharmacist"),
+        ),
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+    conn.close()
+    return user_id
+
+
+def update_user(user_id, fields):
+    if uses_firebase():
+        ref = _collection("users").document(str(user_id))
+        snapshot = ref.get()
+        if not snapshot.exists:
+            return False
+        old = snapshot.to_dict()
+        new_username = fields.get("username", old.get("username"))
+        new_email = fields.get("email", old.get("email"))
+        if find_user_conflict(new_username, new_email, user_id):
+            raise ValueError("Username or email already registered.")
+        if new_username != old.get("username") or new_email != old.get("email"):
+            client = _firestore()
+            for field, value in (("username", old.get("username")), ("email", old.get("email"))):
+                key = hashlib.sha256(f"{field}:{value.strip().casefold()}".encode()).hexdigest()
+                client.collection("_user_keys").document(key).delete()
+            for field, value in (("username", new_username), ("email", new_email)):
+                key = hashlib.sha256(f"{field}:{value.strip().casefold()}".encode()).hexdigest()
+                client.collection("_user_keys").document(key).set({"user_id": int(user_id)})
+        ref.update(fields)
+        return True
+
+    if "email" in fields:
+        existing_user = get_user_by_id(user_id)
+        if existing_user and find_user_conflict(
+            existing_user["username"], fields["email"], user_id
+        ):
+            raise ValueError("Username or email already registered.")
+    allowed = {"full_name", "email", "password_hash"}
+    fields = {key: value for key, value in fields.items() if key in allowed}
+    if not fields:
+        return False
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE users SET {assignments} WHERE id = ?",
+        (*fields.values(), user_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_category_names():
+    if uses_firebase():
+        return sorted(
+            (item["name"] for item in _firebase_documents("categories")),
+            key=str.casefold,
+        )
+    conn = get_connection()
+    rows = conn.execute("SELECT name FROM categories ORDER BY name ASC").fetchall()
+    conn.close()
+    return [row["name"] for row in rows]
+
+
+def get_supplier_names():
+    if uses_firebase():
+        return sorted(
+            (item["name"] for item in _firebase_documents("suppliers")),
+            key=str.casefold,
+        )
+    conn = get_connection()
+    rows = conn.execute("SELECT name FROM suppliers ORDER BY name ASC").fetchall()
+    conn.close()
+    return [row["name"] for row in rows]
+
+
+def get_medicines(search="", category="", sort_by="expiry_asc"):
+    if uses_firebase():
+        rows = _firebase_documents("medicines")
+        if search:
+            term = search.casefold()
+            rows = [
+                row for row in rows
+                if any(term in str(row.get(field, "")).casefold()
+                       for field in ("name", "batch_number", "manufacturer"))
+            ]
+        if category:
+            rows = [row for row in rows if row.get("category") == category]
+        sort_fields = {
+            "name_asc": ("name", False), "name_desc": ("name", True),
+            "qty_desc": ("quantity", True), "qty_asc": ("quantity", False),
+            "expiry_desc": ("expiry_date", True), "expiry_asc": ("expiry_date", False),
+            "id_desc": ("id", True),
+        }
+        field, reverse = sort_fields.get(sort_by, ("expiry_date", False))
+        return sorted(rows, key=lambda row: row.get(field) or (0 if field == "id" else ""), reverse=reverse)
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM medicines").fetchall()
+    conn.close()
+    result = [dict(row) for row in rows]
+    if search:
+        term = search.casefold()
+        result = [
+            row for row in result
+            if any(term in str(row.get(field, "")).casefold()
+                   for field in ("name", "batch_number", "manufacturer"))
+        ]
+    if category:
+        result = [row for row in result if row.get("category") == category]
+    sort_fields = {
+        "name_asc": ("name", False), "name_desc": ("name", True),
+        "qty_desc": ("quantity", True), "qty_asc": ("quantity", False),
+        "expiry_desc": ("expiry_date", True), "expiry_asc": ("expiry_date", False),
+        "id_desc": ("id", True),
+    }
+    field, reverse = sort_fields.get(sort_by, ("expiry_date", False))
+    return sorted(result, key=lambda row: row.get(field) or (0 if field == "id" else ""), reverse=reverse)
+
+
+def get_medicine(medicine_id):
+    if uses_firebase():
+        snapshot = _collection("medicines").document(str(medicine_id)).get()
+        return {"id": int(medicine_id), **snapshot.to_dict()} if snapshot.exists else None
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM medicines WHERE id = ?", (medicine_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_medicine(fields):
+    if uses_firebase():
+        medicine_id = _firebase_next_id("medicines")
+        created = _timestamp()
+        _collection("medicines").document(str(medicine_id)).set({
+            "id": medicine_id, "created_at": created, "updated_at": created, **fields,
+        })
+        return medicine_id
+    conn = get_connection()
+    cursor = conn.execute(
+        """INSERT INTO medicines (
+            name, batch_number, category, manufacturer, supplier, quantity,
+            purchase_price, selling_price, manufacturing_date, expiry_date,
+            minimum_stock, description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        tuple(fields[key] for key in (
+            "name", "batch_number", "category", "manufacturer", "supplier",
+            "quantity", "purchase_price", "selling_price", "manufacturing_date",
+            "expiry_date", "minimum_stock", "description",
+        )),
+    )
+    conn.commit()
+    medicine_id = cursor.lastrowid
+    conn.close()
+    return medicine_id
+
+
+def update_medicine(medicine_id, fields):
+    if uses_firebase():
+        ref = _collection("medicines").document(str(medicine_id))
+        if not ref.get().exists:
+            return False
+        ref.update({**fields, "updated_at": _timestamp()})
+        return True
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE medicines SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (*fields.values(), medicine_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_medicine(medicine_id):
+    medicine = get_medicine(medicine_id)
+    if not medicine:
+        return None
+    if uses_firebase():
+        _collection("medicines").document(str(medicine_id)).delete()
+        for alert in _firebase_documents("alerts"):
+            if str(alert.get("medicine_id")) == str(medicine_id):
+                _collection("alerts").document(str(alert["id"])).delete()
+        return medicine
+    conn = get_connection()
+    conn.execute("DELETE FROM medicines WHERE id = ?", (medicine_id,))
+    conn.commit()
+    conn.close()
+    return medicine
+
+
+def get_alerts(alert_type=None, medicine_id=None):
+    if uses_firebase():
+        medicines_by_id = {
+            str(row["id"]): row for row in _firebase_documents("medicines")
+        }
+        rows = _firebase_documents("alerts")
+        if alert_type:
+            rows = [row for row in rows if row.get("type") == alert_type]
+        if medicine_id is not None:
+            rows = [
+                row for row in rows
+                if str(row.get("medicine_id")) == str(medicine_id)
+            ]
+        for row in rows:
+            medicine = medicines_by_id.get(str(row.get("medicine_id")), {})
+            for field in ("name", "batch_number", "category", "expiry_date", "quantity"):
+                row[f"medicine_{field}" if field == "name" else field] = medicine.get(field)
+        rows.sort(key=lambda row: row.get("created_at", ""), reverse=True)
+        rows.sort(key=lambda row: bool(row.get("is_read")))
+        return rows
+    conn = get_connection()
+    if medicine_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE medicine_id = ? ORDER BY created_at DESC",
+            (medicine_id,),
+        ).fetchall()
+    elif alert_type:
+        rows = conn.execute(
+            """SELECT a.*, m.name AS medicine_name, m.batch_number, m.category,
+                      m.expiry_date, m.quantity
+               FROM alerts a LEFT JOIN medicines m ON a.medicine_id = m.id
+               WHERE a.type = ? ORDER BY a.is_read ASC, a.created_at DESC""",
+            (alert_type,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT a.*, m.name AS medicine_name, m.batch_number, m.category,
+                      m.expiry_date, m.quantity
+               FROM alerts a LEFT JOIN medicines m ON a.medicine_id = m.id
+               ORDER BY a.is_read ASC, a.created_at DESC"""
+        ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_alert(alert_id):
+    if uses_firebase():
+        snapshot = _collection("alerts").document(str(alert_id)).get()
+        return {"id": int(alert_id), **snapshot.to_dict()} if snapshot.exists else None
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def count_alerts(unread_only=False):
+    if uses_firebase():
+        rows = _firebase_documents("alerts")
+        return sum(not row.get("is_read", 0) for row in rows) if unread_only else len(rows)
+    conn = get_connection()
+    where = " WHERE is_read = 0" if unread_only else ""
+    count = conn.execute(f"SELECT COUNT(*) FROM alerts{where}").fetchone()[0]
+    conn.close()
+    return count
+
+
+def set_alert_read(alert_id):
+    if uses_firebase():
+        ref = _collection("alerts").document(str(alert_id))
+        if ref.get().exists:
+            ref.update({"is_read": 1})
+    else:
+        conn = get_connection()
+        conn.execute("UPDATE alerts SET is_read = 1 WHERE id = ?", (alert_id,))
+        conn.commit()
+        conn.close()
+
+
+def mark_all_alerts_read():
+    if uses_firebase():
+        _commit_firestore_batches(
+            lambda batch, snapshot: batch.update(snapshot.reference, {"is_read": 1}),
+            _collection("alerts").stream(),
+        )
+    else:
+        conn = get_connection()
+        conn.execute("UPDATE alerts SET is_read = 1")
+        conn.commit()
+        conn.close()
+
+
+def delete_alert(alert_id):
+    if uses_firebase():
+        _collection("alerts").document(str(alert_id)).delete()
+    else:
+        conn = get_connection()
+        conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
+        conn.commit()
+        conn.close()
+
+
+def clear_alerts():
+    if uses_firebase():
+        _commit_firestore_batches(
+            lambda batch, snapshot: batch.delete(snapshot.reference),
+            _collection("alerts").stream(),
+        )
+    else:
+        conn = get_connection()
+        conn.execute("DELETE FROM alerts")
+        conn.commit()
+        conn.close()
+
+
+def update_settings(fields):
+    if uses_firebase():
+        _collection("settings").document("1").set(fields, merge=True)
+        return
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    conn = get_connection()
+    conn.execute(
+        f"UPDATE settings SET {assignments} WHERE id = 1", tuple(fields.values())
+    )
+    conn.commit()
+    conn.close()
+
+
+def _commit_firestore_batches(add_operation, snapshots):
+    client = _firestore()
+    batch = client.batch()
+    operation_count = 0
+    for snapshot in snapshots:
+        add_operation(batch, snapshot)
+        operation_count += 1
+        if operation_count == 450:
+            batch.commit()
+            batch = client.batch()
+            operation_count = 0
+    if operation_count:
+        batch.commit()
+
+
+def reset_demo_data():
+    if uses_firebase():
+        raise RuntimeError("Demo data reset is disabled for the Firebase database.")
+    init_db(force_reseed=True)
+
+
+def import_sqlite_database(sqlite_path, overwrite=False):
+    if not uses_firebase():
+        raise RuntimeError("Configure Firebase credentials before importing data.")
+    source = sqlite3.connect(sqlite_path)
+    source.row_factory = sqlite3.Row
+    client = _firestore()
+    collection_names = ("users", "categories", "suppliers", "medicines", "alerts", "settings")
+    imported_counts = {}
+    max_ids = {}
+
+    try:
+        for collection_name in collection_names:
+            rows = source.execute(f"SELECT * FROM {collection_name}").fetchall()
+            imported_counts[collection_name] = 0
+            max_id = 0
+            for row in rows:
+                record = dict(row)
+                record_id = record.pop("id", None)
+                if (
+                    collection_name == "users"
+                    and record.get("username") == "admin"
+                    and record.get("email") == "admin@apexmed.com"
+                ):
+                    continue
+                if collection_name == "settings":
+                    document_id = "1"
+                elif collection_name in ("categories", "suppliers"):
+                    document_id = str(record["name"])
+                else:
+                    document_id = str(record_id)
+                target = client.collection(collection_name).document(document_id)
+                if target.get().exists and not overwrite:
+                    continue
+                if collection_name == "settings":
+                    record["id"] = 1
+                elif record_id is not None:
+                    record["id"] = int(record_id)
+                    max_id = max(max_id, int(record_id))
+                target.set(record)
+                imported_counts[collection_name] += 1
+            if collection_name in ("users", "medicines", "alerts"):
+                max_ids[collection_name] = max_id
+
+        for collection_name, max_id in max_ids.items():
+            counter_ref = client.collection("_counters").document(collection_name)
+            current = counter_ref.get()
+            current_max = current.get("value") if current.exists else 0
+            counter_ref.set({"value": max(max_id, current_max)})
+        for user in _firebase_documents("users"):
+            for field in ("username", "email"):
+                value = user.get(field)
+                if value:
+                    key = hashlib.sha256(f"{field}:{value.strip().casefold()}".encode()).hexdigest()
+                    client.collection("_user_keys").document(key).set({"user_id": user["id"]})
+    finally:
+        source.close()
+
+    return imported_counts
+
 
 if __name__ == "__main__":
     init_db(force_reseed=True)

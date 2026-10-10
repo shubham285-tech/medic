@@ -47,7 +47,7 @@
 - **Data Visualizations**: [Chart.js](https://www.chart.js/) for responsive, hardware-accelerated clinical analytics.
 - **Backend**: Python 3.11 + Flask 3.1.
 - **Authentication & Security**: Werkzeug cryptographic password hashing (PBKDF2-SHA256), session hardening (`HttpOnly`, `SameSite`), parameterized SQL queries preventing injection, and `@login_required` route decorators.
-- **Database**: SQLite 3 locally and persistent Turso remotely, with foreign key cascading and indexed batches.
+- **Database**: SQLite 3 locally and Firebase Cloud Firestore in production.
 
 ---
 
@@ -157,19 +157,36 @@ These credentials are for local development only. Vercel deployments do not crea
 
 ---
 
-## ☁️ Deploy to Vercel with persistent data
+## ☁️ Deploy to Vercel with Firebase Firestore
 
-The Vercel deployment uses Turso for persistent SQLite-compatible storage. The local `database.db` file is intentionally excluded from Git and is not used by Vercel.
+Production uses Firebase Cloud Firestore. The local `database.db` remains for local development and is intentionally excluded from Git. Firestore collections are initialized automatically; no demo login or medicines are added to a new Firebase project.
 
-1. Create a Turso database and generate an auth token. Keep both values private.
-2. Import this GitHub repository into Vercel. Vercel detects the Flask application in `app.py`.
-3. Add these environment variables in the Vercel project settings for the environments you use:
-   - `TURSO_DATABASE_URL` — the database URL from Turso.
-   - `TURSO_AUTH_TOKEN` — the database auth token from Turso.
-   - `SECRET_KEY` — a long random value (generate locally with `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
-4. Redeploy after saving the variables. The app creates its schema on startup; no demo login or demo medicine data is added to the remote database. Register an account after deployment.
+1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
+2. Create a **Cloud Firestore** database in **production mode**. Choose a nearby region; Firestore's location cannot be changed later.
+3. In Google Cloud Console for that project, create a service account with the **Cloud Datastore User** role and generate a JSON key. Keep the key private.
+4. Import this GitHub repository into Vercel. Vercel detects the Flask application in `app.py`.
+5. Add these Vercel environment variables for Production:
+   - `FIREBASE_PROJECT_ID` — the Firebase project ID.
+   - `FIREBASE_SERVICE_ACCOUNT_KEY` — the complete service-account JSON as one environment-variable value.
+   - `SECRET_KEY` — generate a long random value locally: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+6. Redeploy after saving the variables. Register the first account from the deployed login page.
 
-Never commit the environment variables or database credentials. Local development and tests continue to use SQLite.
+Never commit or share the service-account key or secret key. The server uses Firebase Admin credentials; do not use a client-side Firebase API key for database access.
+
+### Import existing SQLite data
+
+To copy local users (password hashes), inventory, alerts, categories, suppliers, and settings into a new Firestore database:
+
+1. Back up `database.db` and create the Firebase project, Firestore database, and service-account key described above.
+2. In PowerShell, set the local credentials for the migration process (use the actual file location and project ID):
+   ```powershell
+   $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\service-account.json"
+   $env:FIREBASE_PROJECT_ID = "your-firebase-project-id"
+   .\.venv\Scripts\python.exe migrate_to_firebase.py
+   ```
+3. Review the imported document counts. Then add the Vercel environment variables and deploy.
+
+The importer skips destination documents that already exist and excludes the built-in `admin` / `admin123` demo account for security. Run it against a fresh Firestore database before deploying the app; register a new account after deployment if there are no other imported users. Back up `database.db`; do not upload the database or service-account JSON to GitHub.
 
 ---
 

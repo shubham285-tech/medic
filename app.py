@@ -12,9 +12,11 @@ import db
 
 app = Flask(__name__, static_folder="public/static")
 secret_key = os.environ.get("SECRET_KEY")
-is_production = bool(os.environ.get("VERCEL")) or db.uses_remote_database()
+is_production = bool(os.environ.get("VERCEL")) or db.uses_firebase()
 if is_production and not secret_key:
-    raise RuntimeError("Configure SECRET_KEY for deployments using a remote database.")
+    raise RuntimeError("Configure SECRET_KEY for production deployments.")
+if os.environ.get("VERCEL") and not db.uses_firebase():
+    raise RuntimeError("Configure Firebase Admin credentials to use Firestore on Vercel.")
 app.secret_key = secret_key or "local-development-only-secret"
 app.config.update(
     IS_PRODUCTION=is_production,
@@ -34,15 +36,8 @@ def inject_global_data():
     current_user = None
 
     if "user_id" in session:
-        conn = db.get_connection()
-        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-        if user_row:
-            current_user = dict(user_row)
-        
-        unread_row = conn.execute("SELECT COUNT(*) FROM alerts WHERE is_read = 0").fetchone()
-        if unread_row:
-            unread_alerts_count = unread_row[0]
-        conn.close()
+        current_user = db.get_user_by_id(session["user_id"])
+        unread_alerts_count = db.count_alerts(unread_only=True)
 
     today_str = datetime.date.today().strftime("%B %d, %Y")
     current_year = datetime.date.today().year
@@ -83,12 +78,7 @@ def login():
             flash("Please enter both username/email and password.", "danger")
             return render_template("login.html", identity=identity)
 
-        conn = db.get_connection()
-        user = conn.execute(
-            "SELECT * FROM users WHERE username = ? OR email = ?", 
-            (identity, identity)
-        ).fetchone()
-        conn.close()
+        user = db.get_user_by_identity(identity)
 
         if user and check_password_hash(user["password_hash"], password):
             session.clear()
@@ -125,24 +115,22 @@ def register():
             flash("Password must be at least 6 characters long.", "danger")
             return render_template("login.html", register_mode=True)
 
-        conn = db.get_connection()
-        existing = conn.execute(
-            "SELECT * FROM users WHERE username = ? OR email = ?",
-            (username, email)
-        ).fetchone()
-
-        if existing:
-            conn.close()
+        if db.find_user_conflict(username, email):
             flash("Username or email already registered. Please sign in.", "warning")
             return render_template("login.html", register_mode=True)
 
         pwd_hash = generate_password_hash(password, method="pbkdf2:sha256")
-        conn.execute('''
-            INSERT INTO users (full_name, username, email, password_hash, role)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (full_name, username, email, pwd_hash, role))
-        conn.commit()
-        conn.close()
+        try:
+            db.create_user({
+                "full_name": full_name,
+                "username": username,
+                "email": email,
+                "password_hash": pwd_hash,
+                "role": role,
+            })
+        except ValueError:
+            flash("Username or email already registered. Please sign in.", "warning")
+            return render_template("login.html", register_mode=True)
 
         flash("Account created successfully! Please sign in with your credentials.", "success")
         return redirect(url_for("login"))
@@ -174,7 +162,6 @@ def forgot_password():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
 
@@ -182,7 +169,7 @@ def dashboard():
     db.refresh_alerts()
 
     # Query all medicines
-    medicines = conn.execute("SELECT * FROM medicines ORDER BY expiry_date ASC").fetchall()
+    medicines = db.get_medicines()
 
     total_medicines = len(medicines)
     total_stock_units = sum(m["quantity"] for m in medicines)
@@ -212,18 +199,14 @@ def dashboard():
             low_stock_count += 1
 
     # Fetch top 5 recent alerts
-    recent_alerts = conn.execute('''
-        SELECT a.*, m.name as medicine_name, m.batch_number
-        FROM alerts a
-        LEFT JOIN medicines m ON a.medicine_id = m.id
-        ORDER BY a.created_at DESC
-        LIMIT 5
-    ''').fetchall()
+    recent_alerts = sorted(
+        db.get_alerts(),
+        key=lambda alert: alert.get("created_at", ""),
+        reverse=True,
+    )[:5]
 
     # Fetch 5 recently added medicines
-    recently_added = conn.execute('''
-        SELECT * FROM medicines ORDER BY id DESC LIMIT 5
-    ''').fetchall()
+    recently_added = db.get_medicines(sort_by="id_desc")[:5]
     
     recent_added_evaluated = []
     for r in recently_added:
@@ -233,8 +216,6 @@ def dashboard():
         d = dict(r)
         d.update(calc)
         recent_added_evaluated.append(d)
-
-    conn.close()
 
     stats = {
         "total_medicines": total_medicines,
@@ -267,12 +248,10 @@ def dashboard():
 @app.route("/api/dashboard/charts")
 @login_required
 def api_dashboard_charts():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
 
-    medicines = conn.execute("SELECT * FROM medicines").fetchall()
-    conn.close()
+    medicines = db.get_medicines()
 
     # 1. Expiry status distribution
     status_counts = {"SAFE": 0, "EXPIRING SOON": 0, "EXPIRED": 0}
@@ -332,7 +311,6 @@ def api_dashboard_charts():
 @app.route("/medicines")
 @login_required
 def medicines():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
 
@@ -342,36 +320,8 @@ def medicines():
     stock_filter = request.args.get("stock", "").strip()
     sort_by = request.args.get("sort", "expiry_asc")
 
-    # Base query
-    sql = "SELECT * FROM medicines WHERE 1=1"
-    params = []
-
-    if search_query:
-        sql += " AND (name LIKE ? OR batch_number LIKE ? OR manufacturer LIKE ?)"
-        term = f"%{search_query}%"
-        params.extend([term, term, term])
-
-    if category_filter:
-        sql += " AND category = ?"
-        params.append(category_filter)
-
-    # Sorting
-    if sort_by == "name_asc":
-        sql += " ORDER BY name ASC"
-    elif sort_by == "name_desc":
-        sql += " ORDER BY name DESC"
-    elif sort_by == "qty_desc":
-        sql += " ORDER BY quantity DESC"
-    elif sort_by == "qty_asc":
-        sql += " ORDER BY quantity ASC"
-    elif sort_by == "expiry_desc":
-        sql += " ORDER BY expiry_date DESC"
-    else:
-        sql += " ORDER BY expiry_date ASC"
-
-    raw_medicines = conn.execute(sql, params).fetchall()
-    categories = conn.execute("SELECT name FROM categories ORDER BY name ASC").fetchall()
-    conn.close()
+    raw_medicines = db.get_medicines(search_query, category_filter, sort_by)
+    categories = db.get_category_names()
 
     # Evaluate dynamic status on results
     filtered_medicines = []
@@ -405,7 +355,7 @@ def medicines():
     return render_template(
         "medicines.html",
         medicines=filtered_medicines,
-        categories=[c["name"] for c in categories],
+        categories=categories,
         search_query=search_query,
         category_filter=category_filter,
         status_filter=status_filter,
@@ -417,9 +367,8 @@ def medicines():
 @app.route("/medicines/add", methods=["GET", "POST"])
 @login_required
 def add_medicine():
-    conn = db.get_connection()
-    categories = conn.execute("SELECT name FROM categories ORDER BY name ASC").fetchall()
-    suppliers = conn.execute("SELECT name FROM suppliers ORDER BY name ASC").fetchall()
+    categories = db.get_category_names()
+    suppliers = db.get_supplier_names()
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -490,29 +439,27 @@ def add_medicine():
         if errors:
             for err in errors:
                 flash(err, "danger")
-            conn.close()
             return render_template(
                 "add_medicine.html",
-                categories=[c["name"] for c in categories],
-                suppliers=[s["name"] for s in suppliers],
+                categories=categories,
+                suppliers=suppliers,
                 form_data=request.form
             )
 
-        # Insert into DB
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO medicines (
-                name, batch_number, category, manufacturer, supplier,
-                quantity, purchase_price, selling_price, manufacturing_date,
-                expiry_date, minimum_stock, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            name, batch_number, category, manufacturer, supplier,
-            quantity, purchase_price, selling_price, manufacturing_date,
-            expiry_date, minimum_stock, description
-        ))
-        conn.commit()
-        conn.close()
+        db.create_medicine({
+            "name": name,
+            "batch_number": batch_number,
+            "category": category,
+            "manufacturer": manufacturer,
+            "supplier": supplier,
+            "quantity": quantity,
+            "purchase_price": purchase_price,
+            "selling_price": selling_price,
+            "manufacturing_date": manufacturing_date,
+            "expiry_date": expiry_date,
+            "minimum_stock": minimum_stock,
+            "description": description,
+        })
 
         # Update alerts automatically
         db.refresh_alerts()
@@ -520,27 +467,24 @@ def add_medicine():
         flash(f"Medicine '{name}' (Batch: {batch_number}) added to inventory successfully.", "success")
         return redirect(url_for("medicines"))
 
-    conn.close()
     return render_template(
         "add_medicine.html",
-        categories=[c["name"] for c in categories],
-        suppliers=[s["name"] for s in suppliers],
+        categories=categories,
+        suppliers=suppliers,
         form_data={}
     )
 
 @app.route("/medicines/edit/<int:id>", methods=["GET", "POST"])
 @login_required
 def edit_medicine(id):
-    conn = db.get_connection()
-    medicine = conn.execute("SELECT * FROM medicines WHERE id = ?", (id,)).fetchone()
+    medicine = db.get_medicine(id)
 
     if not medicine:
-        conn.close()
         flash("Medicine not found.", "danger")
         return redirect(url_for("medicines"))
 
-    categories = conn.execute("SELECT name FROM categories ORDER BY name ASC").fetchall()
-    suppliers = conn.execute("SELECT name FROM suppliers ORDER BY name ASC").fetchall()
+    categories = db.get_category_names()
+    suppliers = db.get_supplier_names()
 
     if request.method == "POST":
         name = request.form.get("name", "").strip()
@@ -606,55 +550,48 @@ def edit_medicine(id):
         if errors:
             for err in errors:
                 flash(err, "danger")
-            conn.close()
             return render_template(
                 "edit_medicine.html",
                 medicine=medicine,
-                categories=[c["name"] for c in categories],
-                suppliers=[s["name"] for s in suppliers]
+                categories=categories,
+                suppliers=suppliers
             )
 
-        conn.execute('''
-            UPDATE medicines
-            SET name = ?, batch_number = ?, category = ?, manufacturer = ?,
-                supplier = ?, quantity = ?, purchase_price = ?, selling_price = ?,
-                manufacturing_date = ?, expiry_date = ?, minimum_stock = ?,
-                description = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (
-            name, batch_number, category, manufacturer, supplier,
-            quantity, purchase_price, selling_price, manufacturing_date,
-            expiry_date, minimum_stock, description, id
-        ))
-        conn.commit()
-        conn.close()
+        db.update_medicine(id, {
+            "name": name,
+            "batch_number": batch_number,
+            "category": category,
+            "manufacturer": manufacturer,
+            "supplier": supplier,
+            "quantity": quantity,
+            "purchase_price": purchase_price,
+            "selling_price": selling_price,
+            "manufacturing_date": manufacturing_date,
+            "expiry_date": expiry_date,
+            "minimum_stock": minimum_stock,
+            "description": description,
+        })
 
         db.refresh_alerts()
         flash(f"Medicine '{name}' updated successfully.", "success")
         return redirect(url_for("medicines"))
 
-    conn.close()
     return render_template(
         "edit_medicine.html",
         medicine=medicine,
-        categories=[c["name"] for c in categories],
-        suppliers=[s["name"] for s in suppliers]
+        categories=categories,
+        suppliers=suppliers
     )
 
 @app.route("/medicines/delete/<int:id>", methods=["POST"])
 @login_required
 def delete_medicine(id):
-    conn = db.get_connection()
-    med = conn.execute("SELECT name FROM medicines WHERE id = ?", (id,)).fetchone()
+    med = db.delete_medicine(id)
     if med:
         name = med["name"]
-        conn.execute("DELETE FROM medicines WHERE id = ?", (id,))
-        conn.commit()
-        conn.close()
         db.refresh_alerts()
         flash(f"Medicine '{name}' has been permanently removed from inventory.", "info")
     else:
-        conn.close()
         flash("Medicine not found.", "danger")
 
     return redirect(url_for("medicines"))
@@ -662,13 +599,11 @@ def delete_medicine(id):
 @app.route("/medicines/<int:id>")
 @login_required
 def medicine_details(id):
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
 
-    med = conn.execute("SELECT * FROM medicines WHERE id = ?", (id,)).fetchone()
+    med = db.get_medicine(id)
     if not med:
-        conn.close()
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return jsonify({"error": "Medicine not found"}), 404
         flash("Medicine not found.", "danger")
@@ -681,10 +616,7 @@ def medicine_details(id):
     med_dict.update(calc)
 
     # Fetch alerts for this medicine
-    alerts = conn.execute(
-        "SELECT * FROM alerts WHERE medicine_id = ? ORDER BY created_at DESC", (id,)
-    ).fetchall()
-    conn.close()
+    alerts = db.get_alerts(medicine_id=id)
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.args.get("format") == "json":
         return jsonify({
@@ -701,29 +633,12 @@ def medicine_details(id):
 @app.route("/alerts")
 @login_required
 def alerts():
-    conn = db.get_connection()
     db.refresh_alerts()
 
     alert_type = request.args.get("type", "").strip()
-
-    sql = '''
-        SELECT a.*, m.name as medicine_name, m.batch_number, m.category, m.expiry_date, m.quantity
-        FROM alerts a
-        LEFT JOIN medicines m ON a.medicine_id = m.id
-        WHERE 1=1
-    '''
-    params = []
-    if alert_type:
-        sql += " AND a.type = ?"
-        params.append(alert_type)
-
-    sql += " ORDER BY a.is_read ASC, a.created_at DESC"
-
-    alerts_list = conn.execute(sql, params).fetchall()
-
-    unread_count = conn.execute("SELECT COUNT(*) FROM alerts WHERE is_read = 0").fetchone()[0]
-    total_count = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
-    conn.close()
+    alerts_list = db.get_alerts(alert_type=alert_type or None)
+    unread_count = db.count_alerts(unread_only=True)
+    total_count = db.count_alerts()
 
     return render_template(
         "alerts.html",
@@ -736,11 +651,8 @@ def alerts():
 @app.route("/alerts/mark-read/<int:id>", methods=["POST"])
 @login_required
 def mark_alert_read(id):
-    conn = db.get_connection()
-    conn.execute("UPDATE alerts SET is_read = 1 WHERE id = ?", (id,))
-    conn.commit()
-    unread_count = conn.execute("SELECT COUNT(*) FROM alerts WHERE is_read = 0").fetchone()[0]
-    conn.close()
+    db.set_alert_read(id)
+    unread_count = db.count_alerts(unread_only=True)
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"success": True, "unread_count": unread_count})
@@ -751,10 +663,7 @@ def mark_alert_read(id):
 @app.route("/alerts/mark-all-read", methods=["POST"])
 @login_required
 def mark_all_alerts_read():
-    conn = db.get_connection()
-    conn.execute("UPDATE alerts SET is_read = 1")
-    conn.commit()
-    conn.close()
+    db.mark_all_alerts_read()
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"success": True, "unread_count": 0})
@@ -765,11 +674,8 @@ def mark_all_alerts_read():
 @app.route("/alerts/delete/<int:id>", methods=["POST"])
 @login_required
 def delete_alert(id):
-    conn = db.get_connection()
-    conn.execute("DELETE FROM alerts WHERE id = ?", (id,))
-    conn.commit()
-    unread_count = conn.execute("SELECT COUNT(*) FROM alerts WHERE is_read = 0").fetchone()[0]
-    conn.close()
+    db.delete_alert(id)
+    unread_count = db.count_alerts(unread_only=True)
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"success": True, "unread_count": unread_count})
@@ -780,10 +686,7 @@ def delete_alert(id):
 @app.route("/alerts/clear-all", methods=["POST"])
 @login_required
 def clear_all_alerts():
-    conn = db.get_connection()
-    conn.execute("DELETE FROM alerts")
-    conn.commit()
-    conn.close()
+    db.clear_alerts()
 
     flash("All alerts have been cleared.", "info")
     return redirect(url_for("alerts"))
@@ -795,14 +698,12 @@ def clear_all_alerts():
 @app.route("/reports")
 @login_required
 def reports():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
 
     report_type = request.args.get("type", "expiring_soon")
-    medicines = conn.execute("SELECT * FROM medicines ORDER BY expiry_date ASC").fetchall()
-    categories = conn.execute("SELECT name FROM categories ORDER BY name ASC").fetchall()
-    conn.close()
+    medicines = db.get_medicines()
+    categories = db.get_category_names()
 
     evaluated = []
     total_valuation = 0.0
@@ -834,7 +735,7 @@ def reports():
         "reports.html",
         medicines=evaluated,
         report_type=report_type,
-        categories=[c["name"] for c in categories],
+        categories=categories,
         total_count=len(evaluated),
         total_valuation=total_valuation,
         warning_days=warning_days
@@ -843,13 +744,11 @@ def reports():
 @app.route("/reports/export/csv")
 @login_required
 def export_csv():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
     report_type = request.args.get("type", "all")
 
-    medicines = conn.execute("SELECT * FROM medicines ORDER BY expiry_date ASC").fetchall()
-    conn.close()
+    medicines = db.get_medicines()
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -907,13 +806,11 @@ def export_csv():
 @app.route("/reports/print")
 @login_required
 def print_report():
-    conn = db.get_connection()
     settings = db.get_settings()
     warning_days = settings.get("expiry_warning_days", 30)
     report_type = request.args.get("type", "all")
 
-    medicines = conn.execute("SELECT * FROM medicines ORDER BY expiry_date ASC").fetchall()
-    conn.close()
+    medicines = db.get_medicines()
 
     evaluated = []
     for med in medicines:
@@ -949,8 +846,6 @@ def print_report():
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
-    conn = db.get_connection()
-
     if request.method == "POST":
         action = request.form.get("action", "save_settings")
 
@@ -974,13 +869,14 @@ def settings():
             except ValueError:
                 low_stock_threshold = 15
 
-            conn.execute('''
-                UPDATE settings
-                SET pharmacy_name = ?, contact_email = ?, currency_symbol = ?,
-                    theme = ?, expiry_warning_days = ?, low_stock_threshold = ?
-                WHERE id = 1
-            ''', (pharmacy_name, contact_email, currency_symbol, theme, expiry_warning_days, low_stock_threshold))
-            conn.commit()
+            db.update_settings({
+                "pharmacy_name": pharmacy_name,
+                "contact_email": contact_email,
+                "currency_symbol": currency_symbol,
+                "theme": theme,
+                "expiry_warning_days": expiry_warning_days,
+                "low_stock_threshold": low_stock_threshold,
+            })
 
             # Refresh alerts with new threshold
             db.refresh_alerts()
@@ -999,33 +895,38 @@ def settings():
                         flash("New password must be at least 6 characters.", "danger")
                     else:
                         pwd_hash = generate_password_hash(new_password, method="pbkdf2:sha256")
-                        conn.execute('''
-                            UPDATE users SET full_name = ?, email = ?, password_hash = ? WHERE id = ?
-                        ''', (full_name, email, pwd_hash, session["user_id"]))
-                        conn.commit()
-                        session["full_name"] = full_name
-                        flash("Profile and password updated successfully.", "success")
+                        try:
+                            db.update_user(session["user_id"], {
+                                "full_name": full_name,
+                                "email": email,
+                                "password_hash": pwd_hash,
+                            })
+                            session["full_name"] = full_name
+                            flash("Profile and password updated successfully.", "success")
+                        except ValueError:
+                            flash("Email address already registered.", "danger")
                 else:
-                    conn.execute('''
-                        UPDATE users SET full_name = ?, email = ? WHERE id = ?
-                    ''', (full_name, email, session["user_id"]))
-                    conn.commit()
-                    session["full_name"] = full_name
-                    flash("Profile updated successfully.", "success")
+                    try:
+                        db.update_user(session["user_id"], {
+                            "full_name": full_name,
+                            "email": email,
+                        })
+                        session["full_name"] = full_name
+                        flash("Profile updated successfully.", "success")
+                    except ValueError:
+                        flash("Email address already registered.", "danger")
 
         elif action == "reset_demo_data":
-            if db.uses_remote_database():
+            if db.uses_firebase():
                 flash("Demo data reset is disabled for the persistent database.", "warning")
             else:
-                db.init_db(force_reseed=True)
+                db.reset_demo_data()
                 flash("Database reset! All demo medicines and alerts restored to pristine state.", "info")
 
-        conn.close()
         return redirect(url_for("settings"))
 
     current_settings = db.get_settings()
-    user_row = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    conn.close()
+    user_row = db.get_user_by_id(session["user_id"])
 
     return render_template("settings.html", settings=current_settings, user=user_row)
 

@@ -4,7 +4,7 @@
 ---
 
 ### 1. Architectural Overview
-**Medical Expiry Tracker** utilizes a clean, modular Model-View-Controller (MVC) and RESTful hybrid architecture. The backend is powered by **Python Flask**, with **SQLite** serving as the embedded relational datastore. The presentation layer features high-performance semantic HTML5, modern vanilla CSS3 with hardware-accelerated 3D transforms, glassmorphic styling, and vanilla JavaScript (ES6+) driving asynchronous data exchange, dynamic modals, and interactive data visualizations via **Chart.js**.
+**Medical Expiry Tracker** utilizes a clean, modular Model-View-Controller (MVC) and RESTful hybrid architecture. The backend is powered by **Python Flask**, with **SQLite** for local development and **Firebase Cloud Firestore** for production persistence. The presentation layer features high-performance semantic HTML5, modern vanilla CSS3 with hardware-accelerated 3D transforms, glassmorphic styling, and vanilla JavaScript (ES6+) driving asynchronous data exchange, dynamic modals, and interactive data visualizations via **Chart.js**.
 
 ```mermaid
 graph TD
@@ -22,16 +22,16 @@ graph TD
         AuthMgr[Session & Auth Manager (Werkzeug)]
         ExpiryEngine[Automatic Expiry & Stock Engine]
         ReportGen[Report & CSV/PDF Engine]
-        DBService[SQLite Data Access Layer (DAL)]
+        DBService[Database Access Layer]
     end
 
-    subgraph Storage ["Persistence Layer (SQLite)"]
-        DB[(database.db)]
-        UsersTable[users]
-        MedicinesTable[medicines]
-        AlertsTable[alerts]
-        SettingsTable[settings]
-        CategoriesTable[categories]
+    subgraph Storage ["Persistence Layer (Firestore production / SQLite local)"]
+        DB[(Cloud Firestore / database.db)]
+        UsersTable[users collection / table]
+        MedicinesTable[medicines collection / table]
+        AlertsTable[alerts collection / table]
+        SettingsTable[settings collection / table]
+        CategoriesTable[categories collection / table]
     end
 
     User <-->|HTTPS / HTTP| UI
@@ -147,7 +147,9 @@ erDiagram
     }
 ```
 
-#### 4.2 SQLite Schema Specification
+#### 4.2 Database Collections
+- Production stores records in Firestore collections: `users`, `medicines`, `alerts`, `settings`, `categories`, and `suppliers`.
+- Local development uses the SQLite schema below in `database.db`; `migrate_to_firebase.py` can copy existing rows into Firestore.
 - `users`: Stores user credentials with salted password hashes (`scrypt` or `pbkdf2:sha256`).
 - `medicines`: Core inventory ledger with indexed `batch_number`, `expiry_date`, and `category`.
 - `alerts`: Generated notification ledger keeping track of read/unread states.
@@ -164,7 +166,7 @@ sequenceDiagram
     participant Browser as Client Browser
     participant Flask as Flask Controller
     participant Engine as Expiry Engine
-    participant DB as SQLite DB
+    participant DB as Database (SQLite locally / Firestore in production)
 
     User->>Browser: Opens Dashboard / Inventory
     Browser->>Flask: GET /dashboard
@@ -190,7 +192,7 @@ sequenceDiagram
 ### 6. Security Architecture
 1. **Password Hashing**: Stored passwords use `werkzeug.security.generate_password_hash` and verified with `check_password_hash`. Plaintext passwords are never logged or stored.
 2. **Session Hardening**: Flask session cookies configured with `HttpOnly=True`, `SameSite='Lax'`, and dynamic secret keying.
-3. **SQL Injection Prevention**: 100% of SQLite database queries execute through parameterized queries (`cursor.execute(sql, (param1, param2))`).
+3. **Database Access**: Production access uses the Firebase Admin SDK on the server; local SQLite queries use parameterized SQL.
 4. **Cross-Site Scripting (XSS) Prevention**: All dynamic user strings rendered via Jinja2 auto-escaping.
 5. **CSRF Mitigation**: State-changing POST endpoints validate session origins.
 
@@ -198,4 +200,4 @@ sequenceDiagram
 
 ### 7. Deployment & Execution
 - **Local Dev Server**: Built-in Flask WSGI server running on `http://127.0.0.1:5000`.
-- **Zero External Dependencies Bottleneck**: Standard Python libraries (`sqlite3`, `datetime`, `math`, `csv`) with lightweight, battle-tested `flask` and `werkzeug`.
+- **Storage**: Local runs use SQLite; Vercel deployments require Firebase Admin credentials and Cloud Firestore.
